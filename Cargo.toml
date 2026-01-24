@@ -1,0 +1,8 @@
+[package]
+name = "evcore"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0 OR MIT"
+description = "A library to assist in setting up event-driven architecture"
+
+[dependencies]
