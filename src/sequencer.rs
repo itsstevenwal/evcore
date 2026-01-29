@@ -5,17 +5,17 @@
 //! one sequencer can be active at a time, enforced through leader election.
 
 use crate::{
+    consumer,
     election::Election,
     inbox::Inbox,
-    stream::{Stream, Producer},
     logic::Logic,
-    consumer,
+    stream::{Producer, Stream},
 };
 
 use std::{
+    process,
     sync::atomic::{AtomicUsize, Ordering},
     thread,
-    process,
     time::Duration,
 };
 
@@ -24,14 +24,11 @@ const STATUS_CAUGHT_UP: usize = 1;
 const STATUS_LEADER: usize = 2;
 const STATUS_ACTIVATED: usize = 3;
 
-/// A function that produces the activation event for this sequencer.
-///
-/// The activation event marks this sequencer as the active leader in the stream.
-/// Once the sequencer observes its own activation event, it begins processing.
-pub trait Activator: Fn() -> Vec<u8> + Send + Sync {}
+/// A function that produces an event for the sequencer.
+pub trait EventGenerator: Fn() -> Vec<u8> + Send + Sync {}
 
-// Blanket impl: any closure or fn matching the signature automatically implements Activator.
-impl<T: Fn() -> Vec<u8> + Send + Sync> Activator for T {}
+// Blanket impl: any closure or fn matching the signature automatically implements EventMaker.
+impl<T: Fn() -> Vec<u8> + Send + Sync> EventGenerator for T {}
 
 /// Logic for processing commands into events.
 ///
@@ -56,7 +53,13 @@ pub trait Sequencer: Logic {
     ///
     /// The activator produces an activation event that signals leadership
     /// transition in the stream.
-    fn activator(&self) -> Box<dyn Activator>;
+    fn activator(&self) -> Box<dyn EventGenerator>;
+
+    /// Returns the heartbeat function for this sequencer.
+    ///
+    /// The heartbeat function is used to keep the sequencer alive by publishing
+    /// a heartbeat event to the stream.
+    fn heartbeat(&self) -> Box<dyn EventGenerator>;
 
     /// Returns `true` if the event is this sequencer's own activation event.
     ///
@@ -88,12 +91,14 @@ impl<S: Sequencer> Logic for Wrapper<'_, S> {
 
     fn step(&mut self, event: &[u8]) -> bool {
         self.check_caught_up();
-        
+
+        let cont = self.logic.step(event);
         if self.logic.is_activation(event) {
             self.status.store(STATUS_ACTIVATED, Ordering::Relaxed);
             return false;
         }
-        self.logic.step(event)
+
+        cont
     }
 
     fn caught_up(&mut self) -> bool {
@@ -107,8 +112,14 @@ impl<S: Sequencer> Logic for Wrapper<'_, S> {
 /// main thread handles stream consumption and command processing. If the
 /// sequencer fails to renew its leadership lease, it terminates immediately
 /// to prevent split-brain scenarios.
-pub fn run<S, P, I, E, L>(stream: &S, producer: &P, inbox: &I, election: &E, mut logic: L, interval: Duration)
-where
+pub fn run<S, P, I, E, L>(
+    stream: &S,
+    producer: &P,
+    inbox: &I,
+    election: &E,
+    mut logic: L,
+    interval: Duration,
+) where
     S: Stream,
     P: Producer,
     I: Inbox,
@@ -116,7 +127,8 @@ where
     L: Sequencer,
 {
     let status = AtomicUsize::new(STATUS_STARTING);
-    let activator = logic.activator();
+    let activate = logic.activator();
+    let heartbeat = logic.heartbeat();
 
     thread::scope(|s| {
         s.spawn(|| {
@@ -139,7 +151,7 @@ where
                         if !election.renew() {
                             process::exit(1);
                         }
-                        producer.publish(&activator());
+                        producer.publish(&activate());
                     }
 
                     // Phase 4: Activation observed. Continue renewing lease.
@@ -147,6 +159,7 @@ where
                         if !election.renew() {
                             process::exit(1);
                         }
+                        producer.publish(&heartbeat());
                     }
 
                     _ => unreachable!(),
@@ -156,7 +169,10 @@ where
         });
 
         // Consume stream until activation event is observed
-        let mut wrapper = Wrapper { status: &status, logic: &mut logic };
+        let mut wrapper = Wrapper {
+            status: &status,
+            logic: &mut logic,
+        };
         consumer::run(stream, &mut wrapper);
 
         // Phase 4 (continued): Process commands from inbox

@@ -5,9 +5,9 @@
 //!
 //! Run with: `cargo run --example counter`
 
-use evcore::{Election, Inbox, Receiver, Sender, Sequencer, Stream, Producer};
 use evcore::logic::Logic;
-use evcore::sequencer::Activator;
+use evcore::sequencer::EventGenerator;
+use evcore::{Election, Inbox, Producer, Receiver, Sender, Sequencer, Stream};
 
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -64,7 +64,10 @@ struct MemoryProducer {
 
 impl Producer for MemoryProducer {
     fn publish(&self, data: &[u8]) {
-        println!("[stream] published event: {:?}", String::from_utf8_lossy(data));
+        println!(
+            "[stream] published event: {:?}",
+            String::from_utf8_lossy(data)
+        );
         let mut subs = self.subscribers.lock().unwrap();
         // Broadcast to all subscribers, removing any disconnected ones
         subs.retain(|tx| tx.send(data.to_vec()).is_ok());
@@ -95,7 +98,10 @@ struct MemorySender {
 
 impl Sender for MemorySender {
     fn send(&self, command: &[u8]) {
-        println!("[client] sent command: {:?}", String::from_utf8_lossy(command));
+        println!(
+            "[client] sent command: {:?}",
+            String::from_utf8_lossy(command)
+        );
         self.tx.send(command.to_vec()).unwrap();
     }
 }
@@ -135,6 +141,7 @@ impl Command {
 #[derive(Debug)]
 enum Event {
     Activation,
+    Heartbeat,
     Incremented { new_value: i64 },
     Decremented { new_value: i64 },
 }
@@ -142,6 +149,7 @@ enum Event {
 impl Event {
     fn serialize(&self) -> Vec<u8> {
         match self {
+            Event::Heartbeat => b"heartbeat".to_vec(),
             Event::Activation => b"activation".to_vec(),
             Event::Incremented { new_value } => format!("inc:{}", new_value).into_bytes(),
             Event::Decremented { new_value } => format!("dec:{}", new_value).into_bytes(),
@@ -150,6 +158,9 @@ impl Event {
 
     fn parse(data: &[u8]) -> Option<Self> {
         let s = std::str::from_utf8(data).ok()?;
+        if s == "heartbeat" {
+            return Some(Event::Heartbeat);
+        }
         if s == "activation" {
             return Some(Event::Activation);
         }
@@ -195,6 +206,9 @@ impl Logic for CounterLogic {
     fn step(&mut self, event: &[u8]) -> bool {
         if let Some(parsed) = Event::parse(event) {
             match parsed {
+                Event::Heartbeat => {
+                    println!("[{}] observed heartbeat event", self.label);
+                }
                 Event::Activation => {
                     println!("[{}] observed activation event", self.label);
                 }
@@ -227,12 +241,19 @@ impl Sequencer for CounterLogic {
                 new_value: self.value - 1,
             },
         };
-        println!("[{}] processing {:?} -> {:?}, state: counter = {}", self.label, cmd, event, self.value);
+        println!(
+            "[{}] processing {:?} -> {:?}, state: counter = {}",
+            self.label, cmd, event, self.value
+        );
         Some(event.serialize())
     }
 
-    fn activator(&self) -> Box<dyn Activator> {
-        Box::new(|| { Event::Activation.serialize() })
+    fn activator(&self) -> Box<dyn EventGenerator> {
+        Box::new(|| Event::Activation.serialize())
+    }
+
+    fn heartbeat(&self) -> Box<dyn EventGenerator> {
+        Box::new(|| Event::Heartbeat.serialize())
     }
 
     fn is_activation(&self, event: &[u8]) -> bool {
@@ -250,7 +271,9 @@ fn main() {
     // Create broadcast stream and producer
     let stream = MemoryStream::new();
     let producer = stream.producer();
-    let inbox = MemoryInbox { rx: Mutex::new(inbox_rx) };
+    let inbox = MemoryInbox {
+        rx: Mutex::new(inbox_rx),
+    };
     let sender = MemorySender { tx: inbox_tx };
     let election = AlwaysLeader;
 
