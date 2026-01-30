@@ -159,7 +159,7 @@ pub fn run<S, P, I, E, L>(
                         if !election.renew() {
                             process::exit(1);
                         }
-                        producer.publish(&heartbeat());
+                        inbox.send(&heartbeat());
                     }
 
                     _ => unreachable!(),

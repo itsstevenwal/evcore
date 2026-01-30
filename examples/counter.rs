@@ -77,11 +77,18 @@ impl Producer for MemoryProducer {
 /// In-memory inbox for demonstration purposes.
 struct MemoryInbox {
     rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+    tx: Mutex<mpsc::Sender<Vec<u8>>>,
 }
 
 impl Receiver for MemoryInbox {
     fn recv(&self) -> Vec<u8> {
         self.rx.lock().unwrap().recv().unwrap()
+    }
+}
+
+impl Sender for MemoryInbox {
+    fn send(&self, command: &[u8]) {
+        self.tx.lock().unwrap().send(command.to_vec()).unwrap();
     }
 }
 
@@ -271,10 +278,13 @@ fn main() {
     // Create broadcast stream and producer
     let stream = MemoryStream::new();
     let producer = stream.producer();
+    let sender = MemorySender {
+        tx: inbox_tx.clone(),
+    };
     let inbox = MemoryInbox {
         rx: Mutex::new(inbox_rx),
+        tx: Mutex::new(inbox_tx),
     };
-    let sender = MemorySender { tx: inbox_tx };
     let election = AlwaysLeader;
 
     thread::scope(|s| {

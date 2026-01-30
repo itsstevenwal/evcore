@@ -11,7 +11,7 @@ use crate::Receiver;
 /// sequencer can simply be retried by the consumer.
 ///
 /// Common inbox implementations include gRPC, ZeroMQ, and shared memory IPC.
-pub trait Inbox: Receiver + Sync {
+pub trait Inbox: Sender + Receiver + Sync {
     /// Clears the inbox.
     fn clear(&self);
 }
