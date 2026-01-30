@@ -46,8 +46,9 @@ pub trait Sequencer: Logic {
     ///
     /// Typically validates the command against current state and, if valid,
     /// stamps it with a sequence number to produce an event. Returns `None`
-    /// to reject the command.
-    fn process(&self, command: &[u8]) -> Option<Vec<u8>>;
+    /// to reject the command. This method should also update the internal state of
+    /// the sequencer.
+    fn process(&mut self, command: &[u8]) -> Option<Vec<u8>>;
 
     /// Returns the activator function for this sequencer.
     ///

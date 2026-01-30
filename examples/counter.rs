@@ -238,15 +238,21 @@ impl Logic for CounterLogic {
 }
 
 impl Sequencer for CounterLogic {
-    fn process(&self, command: &[u8]) -> Option<Vec<u8>> {
+    fn process(&mut self, command: &[u8]) -> Option<Vec<u8>> {
         let cmd = Command::parse(command)?;
         let event = match cmd {
-            Command::Increment => Event::Incremented {
-                new_value: self.value + 1,
-            },
-            Command::Decrement => Event::Decremented {
-                new_value: self.value - 1,
-            },
+            Command::Increment => {
+                self.value += 1;
+                Event::Incremented {
+                    new_value: self.value,
+                }
+            }
+            Command::Decrement => {
+                self.value -= 1;
+                Event::Decremented {
+                    new_value: self.value,
+                }
+            }
         };
         println!(
             "[{}] processing {:?} -> {:?}, state: counter = {}",
