@@ -180,7 +180,6 @@ pub fn run<S, P, I, E, L>(
             let command = inbox.recv();
             if let Some(event) = wrapper.logic.process(&command) {
                 producer.publish(&event);
-                wrapper.logic.step(&event);
             }
         }
     });
