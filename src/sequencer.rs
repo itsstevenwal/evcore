@@ -14,9 +14,10 @@ use crate::{
 
 use std::{
     process,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicU64, AtomicUsize, Ordering},
     thread,
     time::Duration,
+    time::SystemTime,
 };
 
 const STATUS_STARTING: usize = 0;
@@ -71,6 +72,7 @@ pub trait Sequencer: Logic {
 
 struct Wrapper<'a, S> {
     status: &'a AtomicUsize,
+    last_step: &'a AtomicU64,
     logic: &'a mut S,
 }
 
@@ -99,6 +101,8 @@ impl<S: Sequencer> Logic for Wrapper<'_, S> {
             return false;
         }
 
+        self.last_step.store(now(), Ordering::Relaxed);
+
         cont
     }
 
@@ -120,6 +124,7 @@ pub fn run<S, P, I, E, L>(
     election: &E,
     mut logic: L,
     interval: Duration,
+    wait_for: Duration,
 ) where
     S: Stream,
     P: Producer,
@@ -128,6 +133,7 @@ pub fn run<S, P, I, E, L>(
     L: Sequencer,
 {
     let status = AtomicUsize::new(STATUS_STARTING);
+    let last_step = AtomicU64::new(0);
     let activate = logic.activator();
     let heartbeat = logic.heartbeat();
 
@@ -137,7 +143,12 @@ pub fn run<S, P, I, E, L>(
                 match status.load(Ordering::Relaxed) {
                     // Phase 1: Consume stream to rebuild state. Clear inbox since
                     // commands received before leadership should be discarded.
-                    STATUS_STARTING => inbox.clear(),
+                    STATUS_STARTING => {
+                        if (last_step.load(Ordering::Relaxed) + wait_for.as_nanos() as u64) < now()
+                        {
+                            status.store(STATUS_CAUGHT_UP, Ordering::Relaxed);
+                        }
+                    }
 
                     // Phase 2: Caught up with stream. Attempt to acquire leadership.
                     STATUS_CAUGHT_UP => {
@@ -172,6 +183,7 @@ pub fn run<S, P, I, E, L>(
         // Consume stream until activation event is observed
         let mut wrapper = Wrapper {
             status: &status,
+            last_step: &last_step,
             logic: &mut logic,
         };
         consumer::run(stream, &mut wrapper);
@@ -184,4 +196,11 @@ pub fn run<S, P, I, E, L>(
             }
         }
     });
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
 }

@@ -332,6 +332,7 @@ fn main() {
             &election,
             sequencer,
             Duration::from_millis(100),
+            Duration::from_secs(1),
         );
     });
 }
